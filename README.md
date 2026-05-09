@@ -1,4 +1,4 @@
-#Lab 1 Assignment
+Lab 1 Assignment
 
 ## Student Information
 - **Name:** Snehangshu Roy
