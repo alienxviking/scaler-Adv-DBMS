@@ -148,7 +148,8 @@ class Catalog:
         self.persist()
 
     # -- persistence --------------------------------------------------------
-    def persist(self) -> None:
+    def to_doc(self) -> dict:
+        """Serialise all metadata to a plain dict (also shipped to replicas)."""
         doc = {"tables": {}}
         for name, t in self.tables.items():
             doc["tables"][name] = {
@@ -161,6 +162,10 @@ class Catalog:
                     for i in t.indexes.values()
                 ],
             }
+        return doc
+
+    def persist(self) -> None:
+        doc = self.to_doc()
         tmp = self.catalog_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(doc, f, indent=2)
@@ -174,6 +179,14 @@ class Catalog:
             return
         with open(self.catalog_path, "r", encoding="utf-8") as f:
             doc = json.load(f)
+        self.load_from_doc(doc)
+
+    def load_from_doc(self, doc: dict) -> None:
+        """Build in-memory tables/heaps/index stubs from a metadata dict.
+
+        Used both by ``load`` (from the JSON sidecar) and by a replica when it
+        receives the primary's catalog snapshot.
+        """
         self.tables.clear()
         for name, td in doc.get("tables", {}).items():
             schema = Schema.from_dict(td["schema"])
