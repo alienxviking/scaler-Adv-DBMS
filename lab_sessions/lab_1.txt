@@ -1,0 +1,126 @@
+# Lab Session 1: File I/O in C++ — Kernel Journey via strace
+
+## Objective
+Understand what happens under the hood when C++ opens and reads a file: from the syscall layer down to inodes, the VFS, and kernel interactions.
+
+---
+
+## Steps
+
+### 1. Write a simple C++ file reader
+
+```cpp
+#include <iostream>
+#include <fstream>
+#include <string>
+
+int main() {
+    std::ifstream file("test.txt");
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file\n";
+        return 1;
+    }
+    std::string line;
+    while (std::getline(file, line)) {
+        std::cout << line << "\n";
+    }
+    return 0;
+}
+```
+
+Compile and create a test file:
+```bash
+echo "hello from lab 1" > test.txt
+g++ -o reader reader.cpp
+```
+
+---
+
+### 2. Trace with strace
+
+```bash
+strace -e trace=openat,read,close,fstat,mmap ./reader
+```
+
+Key syscalls observed:
+
+| Syscall    | What it does                                                          |
+|------------|-----------------------------------------------------------------------|
+| `openat`   | Opens the file; returns a file descriptor (fd)                        |
+| `fstat`    | Fetches inode metadata (size, permissions, timestamps) for the fd     |
+| `read`     | Reads bytes from the file into a user-space buffer                    |
+| `mmap`     | Maps the C++ runtime / shared libs into process address space         |
+| `close`    | Releases the fd, decrements inode reference count                     |
+
+Full trace (condensed example):
+```
+openat(AT_FDCWD, "test.txt", O_RDONLY) = 3
+fstat(3, {st_mode=S_IFREG|0644, st_size=18, ...}) = 0
+read(3, "hello from lab 1\n", 4096)    = 18
+read(3, "", 4096)                       = 0    # EOF
+close(3)                                = 0
+```
+
+---
+
+### 3. The inode journey
+
+When `openat` is called, the kernel does:
+
+1. **Path resolution** — walks the directory tree from `AT_FDCWD` component by component.
+2. **Inode lookup** — each directory entry maps a filename → inode number. The kernel fetches the inode from the filesystem (ext4/btrfs/etc.) via the VFS layer.
+3. **Permission check** — compares process UID/GID against inode's `st_uid`, `st_gid`, `st_mode`.
+4. **File descriptor allocation** — kernel allocates an fd in the process's open-file table, pointing to a `struct file` which holds the current offset and a pointer to the inode.
+
+Check the inode number of a file:
+```bash
+ls -i test.txt
+# e.g.: 1234567 test.txt
+
+stat test.txt
+# shows: Inode: 1234567, Links: 1, Size: 18, Blocks: 8
+```
+
+---
+
+### 4. Kernel layers involved
+
+```
+C++ std::ifstream
+      |
+   fread / libc
+      |
+   read() syscall  <-- user/kernel boundary
+      |
+   VFS (Virtual Filesystem Switch)
+      |
+   Filesystem driver (ext4 / btrfs)
+      |
+   Page cache (if file was recently accessed, no disk I/O)
+      |
+   Block device driver → physical disk (on cache miss)
+```
+
+- The **page cache** means repeated reads of the same file don't hit disk — data is served from RAM.
+- `fstat` is cheap: inode metadata is cached in the kernel's inode cache (icache).
+
+---
+
+### 5. Verify with /proc
+
+```bash
+# While the program is running (add a sleep), check open fds:
+ls -l /proc/<PID>/fd
+
+# See the inode backing fd 3:
+stat /proc/<PID>/fd/3
+```
+
+---
+
+## Key Takeaways
+
+- Every `std::ifstream` open ultimately calls `openat`, which traverses the VFS and resolves an inode.
+- The file descriptor is a per-process handle; the inode is the kernel's canonical representation of the file.
+- `strace` exposes the exact syscall boundary between user-space C++ and the kernel.
+- The page cache absorbs repeated reads; only cold reads go to disk.

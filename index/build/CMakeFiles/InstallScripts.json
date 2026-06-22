@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/kartik/scaler-Adv-DBMS/Index/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
